@@ -62,6 +62,12 @@ function! gutentags#ctags#init(project_root) abort
         endif
     endif
 
+    " on iVim, `ictags` is an internal command so we don't want
+    " to do this check
+    if has( 'iVim' )
+	    let s:did_check_exe = 1
+    endif
+
     " Check if the ctags executable exists.
     if s:did_check_exe == 0
         if g:gutentags_enabled && executable(expand(g:gutentags_ctags_executable, 1)) == 0
@@ -139,68 +145,74 @@ function! gutentags#ctags#generate(proj_dir, tags_file, gen_opts) abort
     endif
 
     " Build the command line.
-    let l:cmd = [s:runner_exe]
-    let l:cmd += ['-e', '"' . s:get_ctags_executable(a:proj_dir) . '"']
-    let l:cmd += ['-t', '"' . l:actual_tags_file . '"']
-    let l:cmd += ['-p', '"' . l:actual_proj_dir . '"']
-    if l:write_mode == 0 && l:tags_file_exists
-        let l:cur_file_path = expand('%:p')
-        if empty(g:gutentags_cache_dir) && l:tags_file_is_local
-            let l:cur_file_path = fnamemodify(l:cur_file_path, ':.')
-        endif
-        let l:cmd += ['-s', '"' . l:cur_file_path . '"']
+    if has( 'iVim' )
+	    echom 'hi'
+	    let l:cmd = ['silent execute ictags']
+	    let l:cmd += [shellescape('--help')]
     else
-        let l:file_list_cmd = gutentags#get_project_file_list_cmd(l:actual_proj_dir)
-        if !empty(l:file_list_cmd)
-            if match(l:file_list_cmd, '///') > 0
-                let l:suffopts = split(l:file_list_cmd, '///')
-                let l:suffoptstr = l:suffopts[1]
-                let l:file_list_cmd = l:suffopts[0]
-                if l:suffoptstr == 'absolute'
-                    let l:cmd += ['-A']
-                endif
-            endif
-            let l:cmd += ['-L', '"' . l:file_list_cmd. '"']
-        endif
+	    let l:cmd = [s:runner_exe]
+	    let l:cmd += ['-e', '"' . s:get_ctags_executable(a:proj_dir) . '"']
+	    let l:cmd += ['-t', '"' . l:actual_tags_file . '"']
+	    let l:cmd += ['-p', '"' . l:actual_proj_dir . '"']
+	    if l:write_mode == 0 && l:tags_file_exists
+		    let l:cur_file_path = expand('%:p')
+		    if empty(g:gutentags_cache_dir) && l:tags_file_is_local
+			    let l:cur_file_path = fnamemodify(l:cur_file_path, ':.')
+		    endif
+		    let l:cmd += ['-s', '"' . l:cur_file_path . '"']
+	    else
+		    let l:file_list_cmd = gutentags#get_project_file_list_cmd(l:actual_proj_dir)
+		    if !empty(l:file_list_cmd)
+			    if match(l:file_list_cmd, '///') > 0
+				    let l:suffopts = split(l:file_list_cmd, '///')
+				    let l:suffoptstr = l:suffopts[1]
+				    let l:file_list_cmd = l:suffopts[0]
+				    if l:suffoptstr == 'absolute'
+					    let l:cmd += ['-A']
+				    endif
+			    endif
+			    let l:cmd += ['-L', '"' . l:file_list_cmd. '"']
+		    endif
+	    endif
+	    if empty(get(l:, 'file_list_cmd', ''))
+		    " Pass the Gutentags recursive options file before the project
+		    " options file, so that users can override --recursive.
+		    " Omit --recursive if this project uses a file list command.
+		    let l:cmd += ['-o', '"' . gutentags#get_res_file('ctags_recursive.options') . '"']
+	    endif
+	    if l:use_tag_relative_opt
+		    let l:cmd += ['-O', shellescape("--tag-relative=yes")]
+	    endif
+	    for extra_arg in g:gutentags_ctags_extra_args
+		    let l:cmd += ['-O', shellescape(extra_arg)]
+	    endfor
+	    if !empty(g:gutentags_ctags_post_process_cmd)
+		    let l:cmd += ['-P', shellescape(g:gutentags_ctags_post_process_cmd)]
+	    endif
+	    let l:proj_options_file = a:proj_dir . '/' .
+				    \g:gutentags_ctags_options_file
+	    if filereadable(l:proj_options_file)
+		    let l:proj_options_file = s:process_options_file(
+					    \a:proj_dir, l:proj_options_file)
+		    let l:cmd += ['-o', '"' . l:proj_options_file . '"']
+	    endif
+	    if g:gutentags_ctags_exclude_wildignore
+		    call s:generate_wildignore_options()
+		    if !empty(s:wildignores_options_path)
+			    let l:cmd += ['-x', shellescape('@'.s:wildignores_options_path, 1)]
+		    endif
+	    endif
+	    for exc in g:gutentags_ctags_exclude
+		    let l:cmd += ['-x', '"' . exc . '"']
+	    endfor
+	    if g:gutentags_pause_after_update
+		    let l:cmd += ['-c']
+	    endif
+	    if g:gutentags_trace
+		    let l:cmd += ['-l', '"' . l:actual_tags_file . '.log"']
+	    endif
+	    let l:cmd = gutentags#make_args(l:cmd)
     endif
-    if empty(get(l:, 'file_list_cmd', ''))
-        " Pass the Gutentags recursive options file before the project
-        " options file, so that users can override --recursive.
-        " Omit --recursive if this project uses a file list command.
-        let l:cmd += ['-o', '"' . gutentags#get_res_file('ctags_recursive.options') . '"']
-    endif
-    if l:use_tag_relative_opt
-        let l:cmd += ['-O', shellescape("--tag-relative=yes")]
-    endif
-    for extra_arg in g:gutentags_ctags_extra_args
-        let l:cmd += ['-O', shellescape(extra_arg)]
-    endfor
-    if !empty(g:gutentags_ctags_post_process_cmd)
-        let l:cmd += ['-P', shellescape(g:gutentags_ctags_post_process_cmd)]
-    endif
-    let l:proj_options_file = a:proj_dir . '/' .
-                \g:gutentags_ctags_options_file
-    if filereadable(l:proj_options_file)
-        let l:proj_options_file = s:process_options_file(
-                    \a:proj_dir, l:proj_options_file)
-        let l:cmd += ['-o', '"' . l:proj_options_file . '"']
-    endif
-    if g:gutentags_ctags_exclude_wildignore
-        call s:generate_wildignore_options()
-        if !empty(s:wildignores_options_path)
-            let l:cmd += ['-x', shellescape('@'.s:wildignores_options_path, 1)]
-        endif
-    endif
-    for exc in g:gutentags_ctags_exclude
-        let l:cmd += ['-x', '"' . exc . '"']
-    endfor
-    if g:gutentags_pause_after_update
-        let l:cmd += ['-c']
-    endif
-    if g:gutentags_trace
-        let l:cmd += ['-l', '"' . l:actual_tags_file . '.log"']
-    endif
-    let l:cmd = gutentags#make_args(l:cmd)
 
     call gutentags#trace("Running: " . string(l:cmd))
     call gutentags#trace("In:      " . getcwd())
